@@ -1,0 +1,306 @@
+import csv
+import re
+import time
+from urllib import request
+from urllib.parse import urljoin, urlparse
+
+import psycopg2
+import requests
+from bs4 import BeautifulSoup
+from selenium import webdriver
+
+from config import host, user, password, db_name
+
+connection = None
+cursor = None
+
+
+try:
+    connection = psycopg2.connect(
+        host=host,
+        user=user,
+        password=password,
+        database=db_name,
+    )
+    connection.autocommit = True
+
+    cursor = connection.cursor()
+    cursor.execute("SELECT version();")
+    print(f"Server version: {cursor.fetchone()}")
+
+
+    # cursor.execute('CREATE TABLE "the_company" ('
+	# '"ID"	serial primary key,'
+	# '"Name"	TEXT,'
+	# '"Description"	TEXT,'
+	# '"Rating"	INTEGER,'
+	# '"Number of reviews"	INTEGER,'
+	# '"Link"	TEXT,'
+	# '"API"	TEXT,'
+	# '"Link API"	TEXT,'
+	# '"Affiliate Program"	TEXT,'
+	# '"Link Affiliate Program"	TEXT)')
+    # cursor.execute('INSERT INTO the_company ("Name", "Description", "Rating", "Number of reviews", "Link", "API", "Link API",'
+    #                '"Affiliate Program", "Link Affiliate Program") VALUES '
+    #                '(1,2,3,4,5,6,7,8,9)')
+    
+    cursor.execute('SELECT * FROM "the_company"')
+    print(cursor.fetchall())
+
+
+except Exception as _ex:
+    print("[INFO] Error while working with PostgreSQL", _ex)
+finally:
+    if connection:
+        cursor.close()
+        connection.close()
+        print("[INFO] PostgreSQL connection closed")
+
+#####################################################
+URL = 'https://startpack.ru/categories'
+URL_content = 'https://startpack.ru'
+HEADERS = {'user-agent' : 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/93.0.4577.82 YaBrowser/21.9.0.1044 Yowser/2.5 Safari/537.36',
+           'accept': '*/*'}
+FILE = 'forms.csv'
+
+def get_html(url, params = None) :
+    r = requests.get(url, headers=HEADERS, params=params)
+    return r
+
+#парсинг информации о компании
+def get_card(html):
+    soup = BeautifulSoup(html, 'html.parser')
+
+    items = soup.find('div', class_='application-page-header-center')
+    #print(items)
+
+    #парсинг названии компании
+    name = items.find("h1").get_text()
+    print(name)
+
+    #парсинг описания
+    descrip = soup.find('div', class_='editor-view-text')
+    print(descrip.get_text())
+
+    #парсинг рейтинга
+    rat = items.find('div', class_='application-page-ratings')
+    #print(rat.get_text(strip=True))
+    number_of_stars = rat.find_all('span', class_='rating-star-24-full')
+    number_of_stars = len(number_of_stars)
+
+    number_of_half_stars = rat.find_all('span', class_='rating-star-24-half')
+    if len(number_of_half_stars) > 0:
+        number_of_stars = number_of_stars + 0.5
+
+    number_of_reviews = re.findall(r'\d+', rat.get_text(strip=True))
+    print(number_of_reviews[0])
+
+    #получении главной ссылки компании
+    href = soup.find('div', class_='application-page-header-offsite')
+    href = href.find('a').get('href')
+    print(href)
+    test_url = '/'.join(href.split('/')[:-1])
+    #проверка на ссылку, если она точная сразу записываем, если нет то переходит по ссылки на сайт и парсим саму ссылку
+    # с адресной строки убирая все лишнее
+    if test_url[0:6] == 'https:':
+        current_url = test_url
+        #print(current_url)
+    else:
+        URL1 = URL_content + href
+        url = requests.get(URL1)
+        current_url = url.url
+        current_url = '/'.join(current_url.split('/')[:-1])
+        #print(current_url)
+
+    # проверка если после / какие либо символы, если есть подставляем их
+    URL1 = get_html(current_url + '/main')
+    if URL1.status_code == 200:
+        current_url = current_url + '/main'
+        print(current_url)
+    else:
+        URL1 = get_html(current_url)
+        print(current_url)
+
+# олучение ссылки от API
+    #подлючаемся к selenium
+    driver = webdriver.Chrome()
+    driver.get(current_url)
+    driver.maximize_window()
+    lenpg = driver.execute_script("window.scrollTo(0, document.body.scrollHeight);\
+                                  var lenpg=document.body.scrollHeight;return lenpg;")
+    match = False
+    #кролинг стр
+    while match == False:
+        lst = lenpg
+        time.sleep(5)
+        lenpg = driver.execute_script("window.scrollTo(0, document.body.scrollHeight);\
+                                      var lenpg=document.body.scrollHeight;return lenpg;")
+        if lst == lenpg:
+            match = True
+
+    html = driver.page_source
+    soup1 = BeautifulSoup(html, 'html.parser')
+    items1 = soup1.find_all('a')
+    #поиск ссылки API  изменения ссылки по необходимости
+    for item in items1:
+        if 'API' in str(item.text):
+            if '/main' in current_url:
+                html_api = current_url.replace('/main', item.get('href'))
+                print(html_api)
+            else:
+                html_api = current_url + item.get('href')
+                print(html_api)
+
+
+
+
+
+
+
+
+    # URL1 = get_html('https://planfix.ru/main/')
+    # #print(URL1.text)
+    # soup1 = BeautifulSoup(URL1.text, 'html.parser')
+    # print (soup1.prettify())
+    # #print(soup1)
+    # items1 = soup1.find_all('a')
+    # #print(items1)
+    # for item in items1:
+    #     #print(str(item))
+    #     if 'api' in str(item):
+    #         print(item)
+
+
+
+
+#выбор компании
+def get_content(html) :
+    soup = BeautifulSoup(html, 'html.parser')
+    items = soup.find_all('div', class_='category-description')
+    items = items[1].find_all('div', class_='app-list-data-caption')
+    #print(items[0])
+
+    #это в цикл и вытащить ссылки
+    href = items[11].find('a')
+    #print(href.get('href'))
+    URL1 = URL_content + href.get('href')
+    URL1 = get_html(URL1)
+    get_card(URL1.text)
+    #items = items.find_all("li")
+
+#выбор категории
+def get_page(html) :
+    people = []
+
+    soup = BeautifulSoup(html, 'html.parser')
+    items = soup.find('div', class_ = 'category-menu category-menu-margin')
+    items = items.find_all("li")
+    #print(items[18])
+    #это надо ручками цифры ставить
+    href = items[0].find_all("a")
+    #print(href[0].get('href'))
+    URL1 = URL_content + href[0].get('href')
+    URL1 = get_html(URL1)
+    get_content(URL1.text)
+
+
+
+    #items = items[0].find_all("tr")
+
+
+
+    # digits = []
+    # letters = []
+    # string = ""
+    # flag = True
+    # i = 0
+    # j = 0
+    #
+    #
+    # items.pop(0)
+    # people = []
+    # for item in items :
+    #
+    #
+    #     popularity = item.find_all('td')
+    #     if popularity[1]:
+    #         for char in popularity[1].get_text(strip=True):
+    #             if char.isalpha() or char == "[":
+    #                 letters.append(char)
+    #                 flag = False
+    #             elif char.isdigit() and flag:
+    #                 digits.append(char)
+    #                 string += digits[j]
+    #                 j += 1
+    #         j = 0
+    #         popularity = int(string)
+    #         string = ""
+    #         digits = []
+    #         flag = True
+    #
+    #
+    #     else:
+    #         popularity = '-'
+    #
+    #     front_end = item.find_all('td')
+    #     if front_end[2]:
+    #         front_end = front_end[2].get_text(strip=True)
+    #     else:
+    #         front_end = '-'
+    #
+    #     back_end = item.find_all('td')
+    #     if back_end[3]:
+    #         back_end = back_end[3].get_text(strip=True)
+    #     else:
+    #         back_end = '-'
+    #
+    #     database = item.find_all('td')
+    #     if database[4]:
+    #         database = database[4].get_text(strip=True)
+    #     else:
+    #         database = '-'
+    #
+    #     notes = item.find_all('td')
+    #     if notes[5]:
+    #         notes = notes[5].get_text().replace('\n', '')
+    #     else:
+    #         notes = '-'
+    #
+    #
+    #
+    #     people.append({
+    #         'Websites' : item.find('a').get_text(strip=True),
+    #         'Popularity': popularity,
+    #
+    #         'Front-end': front_end,
+    #         'Back-end': back_end,
+    #         'Database': database,
+    #         'Notes': notes
+    #
+    #     })
+    #     print(people[i])
+    #     i += 1
+    return people
+
+# def save_file(items, path) :
+#     with open(path, 'w', newline='', encoding="utf-8") as file:
+#         writer = csv.writer(file, delimiter = ';')
+#         writer.writerow(['Websites', 'Popularity', 'Front-end', 'Back-end', 'Database', 'Notes'])
+#         for item in items:
+#             writer.writerow(
+#                 [item['Websites'], item['Popularity'], item['Front-end'], item['Back-end'], item['Database'], item['Notes']])
+
+def parse() :
+
+    html = get_html(URL)
+    if html.status_code == 200:
+        people = []
+
+        people.extend(get_page(html.text))
+        #save_file(people, FILE)
+
+    else:
+        print ('Error')
+
+parse()
